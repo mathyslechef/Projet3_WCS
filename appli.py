@@ -1,175 +1,157 @@
+import streamlit as st 
 import pandas as pd
-import joblib
-from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_absolute_error
-import streamlit as st
+from prophet import Prophet
+import matplotlib.pyplot as plt
+import base64
 
-# Fonction pour convertir les temps en secondes
-def convert_time_to_seconds(time_str):
-    try:
-        if pd.isna(time_str):
-            return None
-        minutes, seconds = time_str.split(':')
-        total_seconds = int(minutes) * 60 + float(seconds.replace(',', '.'))
-        return total_seconds
-    except (ValueError, AttributeError):
-        return None
+# 📌 Fonction pour ajouter une image de fond avec une largeur réduite et bien centrée
+def add_background(image_path):
+    with open(image_path, "rb") as image_file:
+        encoded_image = base64.b64encode(image_file.read()).decode()
+    
+    st.markdown(
+        f"""
+        <style>
+        .stApp {{
+            background: url(data:image/png;base64,{encoded_image}) no-repeat center center fixed;
+            background-size: 50%; /* L’image occupe 50% de la largeur de l’écran */
+            background-attachment: fixed;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 
-# Chargement et prétraitement des données
-def load_and_preprocess_data(file_path):
-    try:
-        # Charger les données
-        data = pd.read_csv(file_path, sep=';', parse_dates=['DOB'])
-        print(f"Nombre initial de lignes : {len(data)}")
+# 📌 Charger les données
+@st.cache_data
+def load_data():
+    file_path = "C:/Users/OTMANE/Downloads/PROJET 3/NAGE_OLYMPIC_FINAL_V3_MODIF_BI.csv"
+    df = pd.read_csv(file_path, sep=';', encoding='utf-8')
 
-        # Supprimer les lignes avec des valeurs manquantes importantes
-        data.dropna(subset=['Distance (in meters)', 'Stroke'], inplace=True)
-        print(f"Lignes après suppression des valeurs manquantes : {len(data)}")
-
-        # Filtrer les formats valides dans Results
-        data = data[data['Results'].notna() & data['Results'].str.contains(r'^\d+:\d+,\d+$', na=False)]
-        print(f"Lignes après filtrage des formats invalides dans Results : {len(data)}")
-
-        # Convertir Results en secondes
-        data['Results'] = data['Results'].apply(convert_time_to_seconds)
-        data = data.dropna(subset=['Results'])
-        print(f"Lignes après conversion des temps : {len(data)}")
-
-        # Convertir certaines colonnes en types appropriés
-        data['Year'] = pd.to_numeric(data['Year'], errors='coerce')
-        data = data.dropna(subset=['Year'])  # Supprimer les lignes avec des années non valides
-        print(f"Lignes après validation de l'année : {len(data)}")
-
-        # Filtrer par année
-        data = data[(data['Year'] >= 1900) & (data['Year'] <= 2024)]
-        print(f"Lignes après filtrage par année : {len(data)}")
-
-        # Nettoyer et convertir Distance (in meters) et IMC en float
-        data['Distance (in meters)'] = pd.to_numeric(data['Distance (in meters)'], errors='coerce')
-        data['Height'] = pd.to_numeric(data['Height'], errors='coerce').fillna(data['Height'].mean())
-        data['Weight'] = pd.to_numeric(data['Weight'], errors='coerce').fillna(data['Weight'].mean())
-
-        # Calculer l'IMC si nécessaire
-        data['IMC'] = data.apply(lambda row: row['Weight'] / ((row['Height'] / 100) ** 2) if row['Height'] > 0 else None, axis=1)
-
-        # Normaliser l'année
-        data['Year_normalized'] = data['Year'] - 1900
-
-        # Ajouter la colonne Distance_IMC
-        data['Distance_IMC'] = data['Distance (in meters)'] * data['IMC']
-        data.dropna(subset=['Distance_IMC'], inplace=True)
-        print(f"Lignes après calcul de Distance_IMC : {len(data)}")
-
-        return data
-    except Exception as e:
-        print(f"Erreur lors du prétraitement des données : {e}")
-        return pd.DataFrame()
-
-# Entraîner le modèle de régression linéaire
-def train_linear_model(data):
-    if len(data) == 0:
-        print("Aucune donnée disponible pour entraîner le modèle.")
-        return None, None
-
-    features = [
-        'Year', 
-        'Distance (in meters)', 
-        'Stroke', 
-        'Relay?', 
-        'Age', 
-        'IMC',
-        'Year_normalized',
-        'Distance_IMC'
-    ]
-    target = 'Results'
-
-    # Encoder les variables catégorielles
-    data_encoded = pd.get_dummies(data[features], drop_first=True)
-
-    if len(data_encoded) < 5:
-        print("Trop peu de données pour diviser en train/test. Entraînement sur tout le dataset.")
-        model = LinearRegression()
-        model.fit(data_encoded, data[target])
-        mae = None
-    else:
-        X_train, X_test, y_train, y_test = train_test_split(
-            data_encoded, data[target], test_size=0.2, random_state=42
-        )
-        model = LinearRegression()
-        model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
-        mae = mean_absolute_error(y_test, y_pred)
-        print(f"Mean Absolute Error: {mae}")
-
-    # Sauvegarder le modèle et les colonnes
-    joblib.dump(model, 'linear_regression_model.joblib')
-    joblib.dump(list(data_encoded.columns), 'columns.joblib')
-
-    return model, data_encoded.columns
-
-# Faire des prédictions
-def predict_future_results(model, columns, future_data):
-    # Encoder les données futures
-    future_data_encoded = pd.get_dummies(future_data, drop_first=True)
-
-    # Assurer que les colonnes correspondent
-    missing_cols = set(columns) - set(future_data_encoded.columns)
-    extra_cols = set(future_data_encoded.columns) - set(columns)
-
-    for col in missing_cols:
-        future_data_encoded[col] = 0
-
-    for col in extra_cols:
-        future_data_encoded.drop(columns=[col], inplace=True)
-
-    future_data_encoded = future_data_encoded[columns]
-
-    # Faire les prédictions
-    predictions = model.predict(future_data_encoded)
-    future_data['Predicted Results'] = predictions
-
-    return future_data[['Distance (in meters)', 'Stroke', 'Predicted Results']]
-
-# Interface utilisateur Streamlit
-def main():
-    st.title("Prédiction des Performances des JO")
-    file_path = r"C:\Users\OTMANE\Downloads\PROJET 3\NAGE_OLYMPIC_FINAL_V3.csv"
-    data = load_and_preprocess_data(file_path)
-    if len(data) == 0:
-        st.error("Aucune donnée disponible après prétraitement. Veuillez vérifier le fichier CSV.")
-        return
-
-    try:
-        model = joblib.load('linear_regression_model.joblib')
-        columns = joblib.load('columns.joblib')
-    except FileNotFoundError:
-        model, columns = train_linear_model(data)
-        if model is None:
-            st.error("Impossible d'entraîner le modèle avec les données actuelles.")
-            return
-
-    year = st.number_input("Année", min_value=1900, max_value=2050, value=2028)
-    distance = st.number_input("Distance (m)", min_value=50, max_value=1500, value=100)
-    stroke = st.selectbox("Style", ['Freestyle', 'Backstroke', 'Breaststroke', 'Butterfly'])
-    relay = st.selectbox("Relais ?", [0, 1])
-    age = st.number_input("Âge", min_value=10, max_value=50, value=25)
-    imc = st.number_input("IMC", min_value=15.0, max_value=35.0, value=22.0)
-
-    input_data = pd.DataFrame({
-        'Year': [year],
-        'Distance (in meters)': [distance],
-        'Stroke': [stroke],
-        'Relay?': [relay],
-        'Age': [age],
-        'IMC': [imc],
-        'Year_normalized': [year - 1900],
-        'Distance_IMC': [distance * imc]
+    # 🛠 Nettoyage des données
+    df['Distance'] = df['Distance'].astype(str).str.strip()
+    df['Stroke'] = df['Stroke'].str.strip().replace({
+        'Freerelay Relay': 'Freestyle Relay',
+        'Meelay Relay': 'Medley Relay',
+        'Medlay Relay': 'Medley Relay'
     })
+    
+    # Conversion des résultats en secondes
+    def convert_to_seconds(result):
+        try:
+            minutes, seconds = result.split(':')
+            seconds, centièmes = seconds.split(',')
+            return int(minutes) * 60 + int(seconds) + int(centièmes) / 100
+        except:
+            return None
 
-    if st.button("Prédire"):
-        prediction = predict_future_results(model, columns, input_data)
-        st.success(f"Temps estimé : {prediction['Predicted Results'].values[0]:.2f} secondes")
+    df['Results_sec'] = df['Results'].apply(convert_to_seconds)
+    
+    return df
 
-if __name__ == "__main__":
-    main()
+# 📌 Appliquer l’image de fond
+add_background(r"C:\Users\OTMANE\Downloads\PROJET 3\swimmer.jpg")
+
+# 📌 Interface : Menu de navigation déroulant avec clé unique
+page = st.sidebar.selectbox("📌 Navigation", ["🏠 Accueil", "📊 Analyse des performances"], key="navigation_selectbox")
+
+# 🎯 Page d'accueil
+if page == "🏠 Accueil":
+    st.markdown(
+        "<h1 style='text-align: center; color: white;'>Bienvenue sur le site des JO 2028</h1>",
+        unsafe_allow_html=True
+    )
+    st.markdown(
+        "<h3 style='text-align: center; color: white;'>Explorez les performances et les prévisions des épreuves de natation.</h3>",
+        unsafe_allow_html=True
+    )
+
+# 🎯 Page d'analyse des performances
+elif page == "📊 Analyse des performances":
+    df = load_data()
+    st.title("🏊 Prédiction des Temps aux JO 2028")
+
+    # 🔽 Sélections des filtres avec clés uniques
+    st.sidebar.title("🎛️ Filtrer les Données")
+    distance_selected = st.sidebar.selectbox("📏 Sélectionnez la distance :", ["Tout"] + sorted(df["Distance"].unique()), key="distance_selectbox")
+    stroke_selected = st.sidebar.selectbox("🌊 Sélectionnez le style de nage :", ["Tout"] + sorted(df["Stroke"].unique()), key="stroke_selectbox")
+    gender_selected = st.sidebar.selectbox("🚻 Sélectionnez le sexe :", ["Tout", "Men", "Women"], key="gender_selectbox")
+    finalists_number = st.sidebar.selectbox("🏅 Sélectionnez le nombre de finalistes à afficher :", [1, 3, 8], key="finalists_selectbox")
+
+    # 📊 Filtrer les données
+    df_filtered = df
+
+    if distance_selected != "Tout":
+        df_filtered = df_filtered[df_filtered["Distance"] == str(distance_selected)]
+        
+    if stroke_selected != "Tout":
+        df_filtered = df_filtered[df_filtered["Stroke"] == stroke_selected]
+        
+    if gender_selected != "Tout":
+        df_filtered = df_filtered[df_filtered["Gender"] == gender_selected]
+
+    # ✅ Vérification des données après filtrage
+    if df_filtered.empty:
+        st.warning("🚨 Aucune donnée disponible avec les critères sélectionnés.")
+    else:
+        # 🔄 Conversion du temps en secondes
+        df_filtered = df_filtered[["Année", "Results_sec"]].dropna()
+        df_filtered = df_filtered.rename(columns={"Année": "ds", "Results_sec": "y"})
+        df_filtered["ds"] = pd.to_datetime(df_filtered["ds"], format="%Y")
+
+        # 📈 Modèle Prophet pour la prédiction
+        model = Prophet()
+        model.fit(df_filtered)
+
+        # 🔮 Faire une prédiction jusqu'en 2028
+        future = model.make_future_dataframe(periods=5, freq='Y')
+        forecast = model.predict(future)
+
+        # 📊 Affichage du graphique avec fond transparent et courbes en jaune doré
+        fig, ax = plt.subplots(figsize=(10, 5))
+
+        # Fond transparent
+        fig.patch.set_alpha(0)  
+        ax.set_facecolor("none")  
+
+        # Tracer les courbes en jaune doré
+        ax.plot(df_filtered["ds"], df_filtered["y"], "o-", color="white", linewidth=3, markersize=10, label="Historique")  
+        ax.plot(forecast["ds"], forecast["yhat"], "--", color="black", linewidth=3, label="Prédiction")  
+
+        # Zone d'incertitude en jaune clair
+        ax.fill_between(forecast["ds"], forecast["yhat_lower"], forecast["yhat_upper"], color="#FFD700", alpha=0.2)
+
+        # Personnalisation des axes et légendes
+        ax.set_xlabel("Année", color="white", fontsize=20, fontweight='bold')  
+        ax.set_ylabel("Temps en secondes", color="white", fontsize=20, fontweight='bold')  
+        ax.tick_params(axis='x', colors="white", labelsize=18)  
+        ax.tick_params(axis='y', colors="white", labelsize=18)  
+        ax.spines["top"].set_color("white")  
+        ax.spines["right"].set_color("white")  
+        ax.spines["left"].set_color("white")  
+        ax.spines["bottom"].set_color("white")  
+        ax.legend(facecolor="none", labelcolor="white", fontsize=16, loc='best')  
+
+        # Afficher le graphique
+        st.pyplot(fig)
+
+        # 🗣 Affichage du temps prédit pour l'année 2028
+        forecast_2028 = forecast[forecast["ds"].dt.year == 2028]
+        
+        if not forecast_2028.empty:
+            predicted_time_2028 = forecast_2028["yhat"].values[0]
+
+            st.write(f"⏱ **Prédictions des résultats aux JO 2028 :**")
+            
+            if finalists_number == 1:
+                st.write(f"🥇 **1er finaliste : {predicted_time_2028:.2f} secondes**")
+            elif finalists_number == 3:
+                st.write(f"🥇 **1er finaliste : {predicted_time_2028:.2f} secondes**")
+                st.write(f"🥈 **2e finaliste : {predicted_time_2028 + 0.5:.2f} secondes**")
+                st.write(f"🥉 **3e finaliste : {predicted_time_2028 + 1.0:.2f} secondes**")
+            elif finalists_number == 8:
+                st.write(f"🥇 **1er finaliste : {predicted_time_2028:.2f} secondes**")
+                for i in range(2, 9):
+                    st.write(f"🏊‍♂️ **{i}e finaliste : {predicted_time_2028 + (i-1)*0.3:.2f} secondes**")
+        else:
+            st.warning("❌ Aucune prédiction disponible pour l'année 2028.")
