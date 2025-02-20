@@ -6,6 +6,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 import prophet
 from prophet import prophet
+from fbprophet import Prophet
 import re
 import base64
 
