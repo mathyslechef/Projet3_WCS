@@ -1,0 +1,5 @@
+streamlit==1.10.0
+pandas==1.4.2
+prophet==1.1.1
+matplotlib==3.4.3
+base64==1.0.0
